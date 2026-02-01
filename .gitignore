@@ -1,0 +1,158 @@
+# ===================
+# Java / Maven
+# ===================
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+
+# ===================
+# IDE - IntelliJ IDEA
+# ===================
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+# ===================
+# IDE - Eclipse
+# ===================
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+# ===================
+# IDE - VS Code
+# ===================
+.vscode/
+
+# ===================
+# IDE - NetBeans
+# ===================
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# ===================
+# Cursor IDE
+# ===================
+.cursor/
+
+# ===================
+# OS Generated Files
+# ===================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ===================
+# Logs
+# ===================
+*.log
+logs/
+**/logs/
+
+# ===================
+# Environment & Secrets
+# ===================
+.env
+.env.local
+.env.*.local
+*.env
+application-local.yml
+application-local.properties
+**/application-local.*
+secrets/
+*.pem
+*.key
+*.crt
+
+# ===================
+# Docker
+# ===================
+# Docker volumes data (if stored locally)
+docker-data/
+**/docker-data/
+
+# ===================
+# Test & Coverage
+# ===================
+/coverage/
+*.lcov
+.nyc_output/
+test-results/
+surefire-reports/
+
+# ===================
+# Package Manager
+# ===================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ===================
+# Build Output
+# ===================
+build/
+dist/
+out/
+
+# ===================
+# Temporary Files
+# ===================
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.cache/
+tmp/
+temp/
+
+# ===================
+# Spring Boot
+# ===================
+HELP.md
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# ===================
+# Kubernetes Secrets (local)
+# ===================
+*-secret.yaml
+*-secrets.yaml
+!*-secret-template.yaml
+
+# ===================
+# Backup Files
+# ===================
+*.bak
+*.backup
+*.old

@@ -1,0 +1,402 @@
+services:
+  # ===================
+  # Database Services
+  # ===================
+  postgres:
+    image: postgres:15-alpine
+    container_name: lms-postgres
+    environment:
+      POSTGRES_USER: lms_admin
+      POSTGRES_PASSWORD: lms_secret_password
+      POSTGRES_MULTIPLE_DATABASES: auth_db,user_db,course_db,assignment_db,quiz_db,attendance_db,analytics_db,notification_db,content_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lms_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lms-network
+
+  # ===================
+  # Cache Services
+  # ===================
+  redis:
+    image: redis:7-alpine
+    container_name: lms-redis
+    command: redis-server --appendonly yes --requirepass redis_secret_password
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secret_password", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lms-network
+
+  # ===================
+  # Authentication Services
+  # ===================
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: lms-keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin_password
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/auth_db
+      KC_DB_USERNAME: lms_admin
+      KC_DB_PASSWORD: lms_secret_password
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+      KC_HEALTH_ENABLED: "true"
+    command: start-dev --import-realm --spi-login-protocol-openid-connect-legacy-logout-redirect-uri=true
+    volumes:
+      - ./infrastructure/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    ports:
+      - "8180:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e 'GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3;grep -q '200 OK' <&3"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - lms-network
+
+  # ===================
+  # Message Broker Services
+  # ===================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: lms-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    ports:
+      - "2181:2181"
+    networks:
+      - lms-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: lms-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - lms-network
+
+  # ===================
+  # Search Services
+  # ===================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: lms-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - lms-network
+
+  # ===================
+  # Object Storage Services
+  # ===================
+  minio:
+    image: minio/minio:latest
+    container_name: lms-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio_admin
+      MINIO_ROOT_PASSWORD: minio_secret_password
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - lms-network
+
+  # ===================
+  # LMS Microservices
+  # ===================
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: lms-api-gateway
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+      - KEYCLOAK_AUTH_SERVER_URL=http://keycloak:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - keycloak
+    networks:
+      - lms-network
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    container_name: lms-auth-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/auth_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+      - KEYCLOAK_AUTH_SERVER_URL=http://keycloak:8080
+    ports:
+      - "8081:8081"
+    depends_on:
+      - postgres
+      - redis
+      - keycloak
+    networks:
+      - lms-network
+
+  user-service:
+    build:
+      context: .
+      dockerfile: services/user-service/Dockerfile
+    container_name: lms-user-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/user_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+    ports:
+      - "8082:8082"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - lms-network
+
+  course-service:
+    build:
+      context: .
+      dockerfile: services/course-service/Dockerfile
+    container_name: lms-course-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/course_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+    ports:
+      - "8083:8083"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - lms-network
+
+  content-service:
+    build:
+      context: .
+      dockerfile: services/content-service/Dockerfile
+    container_name: lms-content-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/content_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minio_admin
+      - MINIO_SECRET_KEY=minio_secret_password
+    ports:
+      - "8084:8084"
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - lms-network
+
+  assignment-service:
+    build:
+      context: .
+      dockerfile: services/assignment-service/Dockerfile
+    container_name: lms-assignment-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/assignment_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8085:8085"
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - lms-network
+
+  quiz-service:
+    build:
+      context: .
+      dockerfile: services/quiz-service/Dockerfile
+    container_name: lms-quiz-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/quiz_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8086:8086"
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - lms-network
+
+  attendance-service:
+    build:
+      context: .
+      dockerfile: services/attendance-service/Dockerfile
+    container_name: lms-attendance-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/attendance_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8087:8087"
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+    networks:
+      - lms-network
+
+  messaging-service:
+    build:
+      context: .
+      dockerfile: services/messaging-service/Dockerfile
+    container_name: lms-messaging-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/notification_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8088:8088"
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - lms-network
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: services/analytics-service/Dockerfile
+    container_name: lms-analytics-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/analytics_db
+      - SPRING_DATASOURCE_USERNAME=lms_admin
+      - SPRING_DATASOURCE_PASSWORD=lms_secret_password
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PASSWORD=redis_secret_password
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    ports:
+      - "8089:8089"
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+    networks:
+      - lms-network
+
+  search-service:
+    build:
+      context: .
+      dockerfile: services/search-service/Dockerfile
+    container_name: lms-search-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_ELASTICSEARCH_URIS=http://elasticsearch:9200
+    ports:
+      - "8090:8090"
+    depends_on:
+      - elasticsearch
+    networks:
+      - lms-network
+
+networks:
+  lms-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
+  elasticsearch_data:
+  minio_data:

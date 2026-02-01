@@ -1,0 +1,67 @@
+server:
+  port: 8084
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 500MB
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: content-service
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/content_db}
+    username: ${SPRING_DATASOURCE_USERNAME:lms_admin}
+    password: ${SPRING_DATASOURCE_PASSWORD:lms_secret_password}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+  data:
+    redis:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      password: ${SPRING_REDIS_PASSWORD:redis_secret_password}
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_AUTH_SERVER_URL:http://localhost:8180}/realms/lms-realm
+          jwk-set-uri: ${KEYCLOAK_AUTH_SERVER_URL:http://localhost:8180}/realms/lms-realm/protocol/openid-connect/certs
+
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minio_admin}
+  secret-key: ${MINIO_SECRET_KEY:minio_secret_password}
+  bucket-name: lms-content
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+logging:
+  level:
+    root: INFO
+    com.lms.content: DEBUG
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://keycloak:8080/realms/lms-realm
+          jwk-set-uri: http://keycloak:8080/realms/lms-realm/protocol/openid-connect/certs
+
+minio:
+  endpoint: http://minio:9000

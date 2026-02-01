@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lms
+
+resources:
+  - namespace.yaml
+  - configmaps/lms-config.yaml
+  - secrets/lms-secrets.yaml
+  - deployments/postgres.yaml
+  - deployments/redis.yaml
+  - deployments/api-gateway.yaml
+  - deployments/auth-service.yaml
+  - deployments/user-service.yaml
+  - deployments/course-service.yaml
+  - ingress/ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: lms-platform
+  app.kubernetes.io/managed-by: kustomize
