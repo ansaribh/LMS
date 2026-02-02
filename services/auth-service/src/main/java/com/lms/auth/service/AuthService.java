@@ -1,5 +1,6 @@
 package com.lms.auth.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lms.auth.dto.*;
 import com.lms.auth.entity.UserProfile;
 import com.lms.auth.entity.UserSession;
@@ -17,8 +18,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -43,26 +46,26 @@ public class AuthService {
             throw new UnauthorizedException("Authentication failed");
         }
 
-        // Get user info from Keycloak
-        KeycloakUserInfo userInfo = keycloakService.getUserInfo(tokenResponse.getAccessToken()).block();
-        if (userInfo == null) {
-            throw new UnauthorizedException("Failed to get user information");
-        }
+        // Extract user info from JWT token
+        Map<String, Object> tokenClaims = decodeJwtPayload(tokenResponse.getAccessToken());
+        String sub = (String) tokenClaims.get("sub");
+        String preferredUsername = (String) tokenClaims.getOrDefault("preferred_username", request.getUsername());
+        String email = (String) tokenClaims.getOrDefault("email", request.getUsername() + "@lms.local");
 
         // Create or update user profile
-        UserProfile userProfile = getOrCreateUserProfile(userInfo);
+        UserProfile userProfile = getOrCreateUserProfileFromToken(sub, preferredUsername, email);
         userProfile.recordLogin();
         userProfileRepository.save(userProfile);
 
-        // Extract roles from Keycloak
-        Set<String> roles = extractRoles(userInfo);
+        // Extract roles from token
+        Set<String> roles = extractRolesFromToken(tokenClaims);
 
         // Create session
         UserSession session = sessionService.createSession(
                 userProfile.getId(),
-                userInfo.getSub(),
-                userInfo.getPreferredUsername(),
-                userInfo.getEmail(),
+                sub,
+                preferredUsername,
+                email,
                 roles,
                 tokenResponse.getAccessToken(),
                 tokenResponse.getRefreshToken(),
@@ -81,6 +84,67 @@ public class AuthService {
                 .expiresIn(tokenResponse.getExpiresIn())
                 .user(userDto)
                 .build();
+    }
+    
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> decodeJwtPayload(String token) {
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length != 3) {
+                throw new UnauthorizedException("Invalid token format");
+            }
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            ObjectMapper mapper = new ObjectMapper();
+            return mapper.readValue(payload, Map.class);
+        } catch (Exception e) {
+            log.error("Failed to decode JWT: {}", e.getMessage());
+            throw new UnauthorizedException("Failed to decode token");
+        }
+    }
+    
+    private UserProfile getOrCreateUserProfileFromToken(String keycloakId, String username, String email) {
+        return userProfileRepository.findByKeycloakId(keycloakId)
+                .orElseGet(() -> {
+                    UserProfile newProfile = UserProfile.builder()
+                            .keycloakId(keycloakId)
+                            .username(username)
+                            .email(email)
+                            .active(true)
+                            .build();
+                    log.info("Creating new user profile for: {}", username);
+                    return userProfileRepository.save(newProfile);
+                });
+    }
+    
+    @SuppressWarnings("unchecked")
+    private Set<String> extractRolesFromToken(Map<String, Object> claims) {
+        Set<String> roles = new HashSet<>();
+        
+        // Check realm_access.roles
+        Map<String, Object> realmAccess = (Map<String, Object>) claims.get("realm_access");
+        if (realmAccess != null) {
+            List<String> realmRoles = (List<String>) realmAccess.get("roles");
+            if (realmRoles != null) {
+                roles.addAll(realmRoles);
+            }
+        }
+        
+        // Check direct roles claim (from lms-scope mapper)
+        Object directRoles = claims.get("roles");
+        if (directRoles instanceof List<?>) {
+            for (Object role : (List<?>) directRoles) {
+                if (role instanceof String) {
+                    roles.add((String) role);
+                }
+            }
+        }
+        
+        // Ensure at least STUDENT role
+        if (roles.isEmpty()) {
+            roles.add("STUDENT");
+        }
+        
+        return roles;
     }
 
     public TokenResponse refreshToken(RefreshTokenRequest request) {
