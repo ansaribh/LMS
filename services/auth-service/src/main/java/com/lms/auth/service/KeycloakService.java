@@ -35,7 +35,7 @@ public class KeycloakService {
         formData.add("client_secret", keycloakProperties.getClientSecret());
         formData.add("username", username);
         formData.add("password", password);
-        formData.add("scope", "openid profile email");
+        formData.add("scope", "openid");
 
         return webClient.post()
                 .uri(keycloakProperties.getTokenUrl())
